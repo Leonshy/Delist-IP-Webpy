@@ -14,6 +14,11 @@ return [
     */
     'trusted_proxies' => env('TRUSTED_PROXIES', ''),
 
+    'plesk_ssh_host' => env('PLESK_SSH_HOST'),
+    'plesk_ssh_port' => env('PLESK_SSH_PORT', 22),
+    'plesk_ssh_user' => env('PLESK_SSH_USER', 'root'),
+    'plesk_ssh_key'  => env('PLESK_SSH_KEY'),
+
     /*
     |--------------------------------------------------------------------------
     | Allowed Jails for Self-Unblock

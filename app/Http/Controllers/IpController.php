@@ -13,11 +13,44 @@ class IpController extends Controller
 {
     private PleskService $pleskService;
     private const JAIL_FRIENDLY_NAMES = [
-        'plesk-panel' => 'Demasiados intentos fallidos de acceso al panel de administración',
-        'dovecot' => 'Demasiados intentos fallidos de acceso al correo entrante',
-        'postfix' => 'Demasiados intentos fallidos de autenticación de correo saliente',
-        'ssh' => 'Demasiados intentos fallidos de acceso SSH',
-        'recidive' => 'La IP fue bloqueada nuevamente por repetición de eventos sospechosos',
+        // Plesk
+        'plesk-panel'          => 'Demasiados intentos fallidos de acceso al panel de administración',
+        'plesk-dovecot'        => 'Demasiados intentos fallidos de acceso al correo entrante',
+        'plesk-postfix'        => 'Demasiados intentos fallidos de autenticación de correo saliente',
+        'plesk-one-week-ban'   => 'Demasiados intentos fallidos de autenticación',
+        'plesk-apache'         => 'Demasiados intentos fallidos de acceso al servidor web',
+        'plesk-apache-badbot'  => 'Acceso bloqueado por comportamiento de bot malicioso',
+        'plesk-modsecurity'    => 'Acceso bloqueado por el firewall de aplicaciones web (WAF)',
+        'plesk-wordpress'      => 'Demasiados intentos fallidos de acceso a WordPress',
+        'plesk-proftpd'        => 'Demasiados intentos fallidos de acceso FTP',
+        'plesk-roundcube'      => 'Demasiados intentos fallidos de acceso al webmail',
+        'plesk-horde'          => 'Demasiados intentos fallidos de acceso al webmail',
+        // Apache
+        'apache-auth'          => 'Demasiados intentos fallidos de autenticación en el servidor web',
+        'apache-badbots'       => 'Acceso bloqueado por comportamiento de bot malicioso',
+        'apache-modsecurity'   => 'Acceso bloqueado por el firewall de aplicaciones web (WAF)',
+        'apache-noscript'      => 'Acceso bloqueado por intentos de explotar scripts inexistentes',
+        'apache-overflows'     => 'Acceso bloqueado por solicitudes maliciosas al servidor web',
+        'apache-shellshock'    => 'Acceso bloqueado por intento de explotación crítica del servidor',
+        // Nginx
+        'nginx-http-auth'      => 'Demasiados intentos fallidos de autenticación web',
+        'nginx-limit-req'      => 'Acceso bloqueado por exceso de solicitudes al servidor',
+        'nginx-botsearch'      => 'Acceso bloqueado por comportamiento de bot malicioso',
+        'nginx-bad-request'    => 'Acceso bloqueado por solicitudes inválidas al servidor',
+        'nginx-forbidden'      => 'Acceso bloqueado por múltiples intentos de acceso no autorizado',
+        // SSH y acceso remoto
+        'sshd'                 => 'Demasiados intentos fallidos de acceso SSH',
+        'ssh'                  => 'Demasiados intentos fallidos de acceso SSH',
+        // Correo
+        'dovecot'              => 'Demasiados intentos fallidos de acceso al correo entrante',
+        'postfix'              => 'Demasiados intentos fallidos de autenticación de correo saliente',
+        'postfix-sasl'         => 'Demasiados intentos fallidos de autenticación de correo saliente',
+        // FTP
+        'proftpd'              => 'Demasiados intentos fallidos de acceso FTP',
+        'pure-ftpd'            => 'Demasiados intentos fallidos de acceso FTP',
+        'vsftpd'               => 'Demasiados intentos fallidos de acceso FTP',
+        // Reincidencia
+        'recidive'             => 'La IP fue bloqueada nuevamente por repetición de eventos sospechosos',
     ];
 
     public function __construct(PleskService $pleskService)
@@ -143,8 +176,8 @@ class IpController extends Controller
             ->latest()
             ->first();
 
-        if ($lastUnblock && $lastUnblock->created_at->diffInMinutes(now()) < config('ip-unblock.cooldown_minutes', 60)) {
-            $minutesLeft = config('ip-unblock.cooldown_minutes', 60) - $lastUnblock->created_at->diffInMinutes(now());
+        if ($lastUnblock && $lastUnblock->created_at->diffInMinutes(now()) < config('ip-unblock.cooldown_minutes', 10)) {
+            $minutesLeft = (int) ceil(config('ip-unblock.cooldown_minutes', 10) - $lastUnblock->created_at->diffInRealMinutes(now()));
             
             IpUnblockLog::create([
                 'ip' => $ip,
@@ -174,7 +207,7 @@ class IpController extends Controller
         ]);
 
         if ($unblockSuccess) {
-            RateLimiter::reset($rateLimitKey);
+            RateLimiter::clear($rateLimitKey);
             
             return response()->json([
                 'success' => true,
@@ -199,19 +232,17 @@ class IpController extends Controller
 
         $remoteAddr = $request->server('REMOTE_ADDR', $request->ip());
 
-        if (!empty($trustedProxies) && in_array($remoteAddr, $trustedProxies)) {
-            // CF-Connecting-IP is set by Cloudflare and cannot be spoofed by the client
+        if (!empty($trustedProxies) && $this->isInTrustedProxies($remoteAddr, $trustedProxies)) {
             $cfIp = $request->header('CF-Connecting-IP');
             if ($cfIp && filter_var(trim($cfIp), FILTER_VALIDATE_IP)) {
                 return trim($cfIp);
             }
 
-            // Fallback: take the rightmost non-proxy IP from X-Forwarded-For
             $xForwardedFor = $request->header('X-Forwarded-For');
             if ($xForwardedFor) {
                 $ips = array_reverse(array_map('trim', explode(',', $xForwardedFor)));
                 foreach ($ips as $candidateIp) {
-                    if (filter_var($candidateIp, FILTER_VALIDATE_IP) && !in_array($candidateIp, $trustedProxies)) {
+                    if (filter_var($candidateIp, FILTER_VALIDATE_IP) && !$this->isInTrustedProxies($candidateIp, $trustedProxies)) {
                         return $candidateIp;
                     }
                 }
@@ -226,6 +257,22 @@ class IpController extends Controller
         }
 
         return $ip;
+    }
+
+    private function isInTrustedProxies(string $ip, array $proxies): bool
+    {
+        foreach ($proxies as $proxy) {
+            if (str_contains($proxy, '/')) {
+                [$subnet, $bits] = explode('/', $proxy);
+                $mask = -1 << (32 - (int)$bits);
+                if ((ip2long($ip) & $mask) === (ip2long($subnet) & $mask)) {
+                    return true;
+                }
+            } elseif ($ip === $proxy) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -27,7 +27,8 @@ class PleskService
         $port    = (int) $this->sshPort;
         $arg     = escapeshellarg($remoteArg);
 
-        $command = "ssh -i {$keyFile} -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=10 -p {$port} {$user}@{$host} -- {$arg} 2>&1";
+        $knownHosts = escapeshellarg(dirname($this->sshKey) . '/known_hosts');
+        $command = "ssh -i {$keyFile} -o StrictHostKeyChecking=yes -o UserKnownHostsFile={$knownHosts} -o BatchMode=yes -o ConnectTimeout=10 -p {$port} {$user}@{$host} -- {$arg} 2>&1";
 
         $output    = [];
         $returnVar = 0;

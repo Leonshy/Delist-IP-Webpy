@@ -61,5 +61,5 @@ return [
     | same IP. Prevents abuse of the unblock functionality.
     |
     */
-    'cooldown_minutes' => env('UNBLOCK_COOLDOWN_MINUTES', 60),
+    'cooldown_minutes' => env('UNBLOCK_COOLDOWN_MINUTES', 10),
 ];

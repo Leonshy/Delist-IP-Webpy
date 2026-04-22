@@ -1,8 +1,11 @@
+/reference
 /node_modules
 /public/build
 /public/hot
 /public/storage
 /storage/*.key
+.ssh/
+.DS_Store
 /vendor
 .env
 .env.backup
